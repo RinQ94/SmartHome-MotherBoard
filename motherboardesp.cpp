@@ -3,12 +3,15 @@
 // Created by RinQ
 // Code for motherboard, connected to 8 relays and 6 buttons
 // and another ESP32 for temmperature sensors
-// ToDo: 1. OTA
+// ToDo: 1. OTA V
 //       2. Connect to slave - panel in bathroom (LED, buttons, temperature sensor)
 //       3. Connect to slave - panel in den (LED, buttons, temperature sensor)
-//       4. State Machine
+//       4. State Machine V
 //----------------------------------------------------------------------------------------
 #include "OneButton.h"
+#include <WiFi.h>
+#include <WebServer.h>
+#include <ArduinoOTA.h>
 
 #define BUTTON_PIN_1 32 //Hall Left button
 #define BUTTON_PIN_2 33 //Hall Mid button
@@ -22,10 +25,7 @@
 //#define BUTTON_PIN_8 12
 //}
 
-
-
-
-#define READY_PIN 23
+#define POWER_ON_PIN 23
 //available for buttons: 27,32,33,25,26,27,14,12,13
 
 #define RELAY_1 4
@@ -38,6 +38,15 @@
 #define RELAY_8 22
 
 uint8_t Relays[8] = {RELAY_1, RELAY_2, RELAY_3, RELAY_4, RELAY_5, RELAY_6, RELAY_7, RELAY_8};
+
+// Table for room names
+const char* rooms[] = { "kuchnia", "biuro", "lazienka", "salon", "balkon", "szafka_elektryczna" };
+
+WebServer server(80);
+
+// Wi-Fi
+const char* ssid = "...";
+const char* password = "...";
 
 // RelayStates Variable
 uint8_t relayStates = 0b00000000;
@@ -54,6 +63,9 @@ uint8_t hiddenStates = 0xff;
 
 void setup() {
   Serial.begin(115200);
+  pinMode(POWER_ON_PIN, OUTPUT);
+  digitalWrite(POWER_ON_PIN, LOW); // Power supply on
+  delay(200); // Delay for power suply
 
   // Initialize button pins
   button1.attachClick(click1);
@@ -71,10 +83,17 @@ void setup() {
   for (uint8_t i = 0; i < 8; i++){
     pinMode(Relays[i],OUTPUT);
   }
+
+  // OTA, WIFI
+  setupWiFi();
+  setupOTA();
+  setupServer();
 }
 
 void loop() {
 
+  server.handleClient();
+  ArduinoOTA.handle();
   maketicks();
   ReadSerial();
   updateRelays();
@@ -91,6 +110,28 @@ void maketicks(){
   button5.tick();
 }
 
+void setupWiFi() {
+  WiFi.begin(ssid, password);
+  Serial.print("Łączenie z siecią Wi-Fi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.print(".");
+  }
+  Serial.println("\nPołączono z Wi-Fi.");
+  Serial.print("Adres IP: ");
+  Serial.println(WiFi.localIP());
+}
+
+void setupOTA() {
+  ArduinoOTA.begin();
+  Serial.println("OTA ready.");
+}
+
+void setupServer() {
+  server.on("/lights", handleWebPage); // mainpage
+  server.begin();
+  Serial.println("HTTP Running.");
+}
 
 // click functions
 void click1() {
@@ -158,4 +199,12 @@ void ReadSerial(){
       relayStates = static_cast<uint8_t>(IncomingState);
     } 
  }
+}
+
+void handleWebPage() {
+  String html = R"rawliteral(
+  
+  
+  )rawliteral";
+  server.send(200, "text/html", html);
 }
