@@ -1,0 +1,157 @@
+#include <OneWire.h>
+#include <DallasTemperature.h>
+#include <WiFi.h>
+#include <WebServer.h>
+#include <ArduinoOTA.h>
+
+// Pin podłączony do linii danych czujników Dallas
+#define ONE_WIRE_BUS 22
+
+// Tablica nazw pomieszczeń (konfigurowalna)
+const char* rooms[] = { "kuchnia", "biuro", "lazienka", "salon", "balkon", "szafka_elektryczna" };
+
+// Liczba czujników automatycznie określona na podstawie rozmiaru tablicy
+const int SENSOR_COUNT = sizeof(rooms) / sizeof(rooms[0]);
+
+// Dane do połączenia Wi-Fi
+const char* ssid = "UPC2301305";
+const char* password = "N0szmandarynka";
+
+OneWire oneWire(ONE_WIRE_BUS);
+DallasTemperature sensors(&oneWire);
+
+WebServer server(80);
+
+// Deklaracje funkcji
+void setupOTA();
+void setupWiFi();
+void setupServer();
+void handleJson();
+void readTemperatures();
+void handleRequests();
+
+// Funkcja `setup`
+void setup() {
+  Serial.begin(115200);
+  pinMode(ONE_WIRE_BUS, INPUT_PULLUP);
+  
+  // Inicjalizacja czujników temperatury
+  sensors.begin();
+  Serial.print("Wykryto czujniki: ");
+  Serial.println(sensors.getDeviceCount());
+
+  if (sensors.getDeviceCount() < SENSOR_COUNT) {
+    Serial.println("UWAGA: Wykryto mniej czujników niż określono w konfiguracji.");
+  }
+
+  // Konfiguracje
+  setupWiFi();
+  setupOTA();
+  setupServer();
+}
+
+// Pętla główna
+void loop() {
+  readTemperatures();
+  handleRequests();
+  ArduinoOTA.handle();
+  delay(2000); // Opóźnienie przed kolejnym odczytem
+}
+
+// === Sekcja: Konfiguracje ===
+void setupWiFi() {
+  WiFi.begin(ssid, password);
+  Serial.print("Łączenie z siecią Wi-Fi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.print(".");
+  }
+  Serial.println("\nPołączono z Wi-Fi.");
+  Serial.print("Adres IP: ");
+  Serial.println(WiFi.localIP());
+}
+
+void setupOTA() {
+  ArduinoOTA.begin();
+  Serial.println("OTA gotowe.");
+}
+
+void setupServer() {
+  server.on("/temp", handleWebPage); // Obsługa strony głównej
+  server.on("/data", handleJson); // Obsługa JSON
+  server.begin();
+  Serial.println("Serwer HTTP uruchomiony.");
+}
+
+// === Sekcja: Obsługa żądań ===
+void handleJson() {
+  String json = "{ \"rooms\": [";
+  for (int i = 0; i < SENSOR_COUNT; i++) {
+    DeviceAddress sensorAddress;
+    json += "{ \"room\": \"" + String(rooms[i]) + "\", ";
+    if (sensors.getAddress(sensorAddress, i)) {
+      float temperature = sensors.getTempC(sensorAddress);
+      json += "\"temperature\": " + String(temperature);
+    } else {
+      json += "\"temperature\": null";
+    }
+    json += "}";
+    if (i < SENSOR_COUNT - 1) {
+      json += ", ";
+    }
+  }
+  json += "] }";
+
+  server.send(200, "application/json", json);
+}
+
+void handleRequests() {
+  server.handleClient();
+}
+
+// === Sekcja: Odczyt temperatur ===
+void readTemperatures() {
+  sensors.requestTemperatures();
+}
+
+void handleWebPage() {
+  String html = "<!DOCTYPE html>"
+                "<html lang='en'>"
+                "<head>"
+                "<meta charset='UTF-8'>"
+                "<meta name='viewport' content='width=device-width, initial-scale=1.0'>"
+                "<title>Temperatury</title>"
+                "<style>"
+                "body { font-family: Arial, sans-serif; margin: 0; padding: 0; background-color: #1f272a; }"
+                "h1 { text-align: center; color: #e3e3e3; padding: 20px 0; }"
+                ".container { max-width: 600px; margin: 20px auto; background: #242e31; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); }"
+                ".room { display: flex; justify-content: space-between; padding: 10px; border-bottom: 1px solid #ddd; color: #a5a5a5;}"
+                ".room:last-child { border-bottom: none; }"
+                ".name { font-weight: bold; }"
+                ".temperature { color: #a5a5a5; }"
+                "</style>"
+                "</head>"
+                "<body>"
+                "<h1>Czujniki temperatur Inowrocławska</h1>"
+                "<div class='container'>";
+
+  for (int i = 0; i < SENSOR_COUNT; i++) {
+    DeviceAddress sensorAddress;
+    String temperature = "brak danych";
+    if (sensors.getAddress(sensorAddress, i)) {
+      float temp = sensors.getTempC(sensorAddress);
+      temperature = String(temp, 1) + " °C";
+    }
+
+    html += "<div class='room'>"
+            "<span class='name'>" + String(rooms[i]) + "</span>"
+            "<span class='temperature'>" + temperature + "</span>"
+            "</div>";
+  }
+
+  html += "</div>"
+          "</body>"
+          "</html>";
+
+  server.send(200, "text/html", html);
+}
