@@ -1,0 +1,72 @@
+// I2C Relay driver ESP32. backup file
+
+#include <Wire.h>
+
+// --- KONFIGURACJA ---
+#define I2C_SLAVE_ADDR 0x02
+#define INTERRUPT_PIN 4
+#define SDA_1 21
+#define SCL_1 22
+
+// Tablica Twoich 12 przekaźników
+const int relayPins[] = {13, 14, 27, 26, 16, 33, 32, 23, 12, 17, 19, 18};
+const int numRelays = sizeof(relayPins) / sizeof(relayPins[0]);
+
+void receiveEvent(int howMany) {
+  // Sprawdzamy, czy dotarł przynajmniej 1 bajt
+  while (Wire.available()) {
+    byte relayIndex = Wire.read(); // Odczytujemy numer przekaźnika (0-11)
+
+    // Walidacja: czy numer mieści się w zakresie tablicy
+    if (relayIndex < numRelays) {
+      // Pobieramy numer pinu z tablicy
+      int pin = relayPins[relayIndex];
+      
+      // Zmieniamy stan na przeciwny
+      digitalWrite(pin, !digitalRead(pin));
+
+      Serial.print("Przełączono przekaźnik nr: ");
+      Serial.print(relayIndex);
+      Serial.print(" (Pin: ");
+      Serial.print(pin);
+      Serial.println(")");
+    } else {
+      Serial.print("Błąd: Otrzymano indeks poza zakresem: ");
+      Serial.println(relayIndex);
+    }
+  }
+
+  // Opcjonalne powiadomienie Mastera o wykonaniu zadania
+  digitalWrite(INTERRUPT_PIN, LOW);
+  delayMicroseconds(50);
+  digitalWrite(INTERRUPT_PIN, HIGH);
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  // Konfiguracja wszystkich pinów przekaźników
+  for (int i = 0; i < numRelays; i++) {
+    pinMode(relayPins[i], OUTPUT);
+    digitalWrite(relayPins[i], LOW); 
+  }
+
+  // Pin przerwania
+  pinMode(INTERRUPT_PIN, OUTPUT);
+  digitalWrite(INTERRUPT_PIN, HIGH);
+
+  // Start I2C Slave na konkretnych pinach
+  if (!Wire.begin(I2C_SLAVE_ADDR, SDA_1, SCL_1, 400000)) {
+    Serial.println("I2C Init Failed");
+    while(1);
+  }
+  
+  Wire.onReceive(receiveEvent);
+
+  Serial.println("ESP32 gotowy. Czekam na numer przekaźnika (0-11)...");
+}
+
+void loop() {
+  // Wszystko dzieje się w receiveEvent
+  delay(10);
+}
