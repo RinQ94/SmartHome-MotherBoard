@@ -1,10 +1,18 @@
 #include <Wire.h>
 #include <WiFi.h>
 #include <WebServer.h>
+#include <LittleFS.h>
+#include <ESPmDNS.h> // Biblioteka dla adresu tekstowego
+#include "time.h"
 
 // --- KONFIGURACJA WiFi ---
-const char* ssid = "*";
-const char* password = "*";
+const char* ssid = "x";
+const char* password = "x";
+
+// --- KONFIGURACJA CZASU (NTP) ---
+const char* ntpServer = "pool.ntp.org";
+const long  gmtOffset_sec = 3600;      // UTC+1
+const int   daylightOffset_sec = 3600; // Czas letni (+1h)
 
 // --- KONFIGURACJA I2C ---
 #define I2C_SLAVE_ADDR 0x02
@@ -12,17 +20,12 @@ const char* password = "*";
 #define SDA_1 21
 #define SCL_1 22
 
-// --- KONFIGURACJA PRZEKAŹNIKÓW ---
+// --- PRZEKAŹNIKI ---
 const int relayPins[] = {13, 14, 27, 26, 16, 33, 32, 23, 12, 17, 19, 18};
 const int numRelays = sizeof(relayPins) / sizeof(relayPins[0]);
-uint16_t relayStates = 0; // Przechowuje stan bitowy (0-4095)
+uint16_t relayStates = 0;
 
-struct Room {
-  String name;
-  String icon;
-};
-
-// Przykładowe dane dla 12 przekaźników
+struct Room { String name; String icon; };
 Room roomData[] = {
   {"Sypialnia", "bed"}, {"Łazienka", "water_drop"}, {"Kuchnia", "microwave"}, 
   {"Łazienka2", "bathtub"}, {"Korytarz", "door_front"}, {"Biuro", "work"},
@@ -32,18 +35,41 @@ Room roomData[] = {
 
 WebServer server(80);
 
-// --- FUNKCJE POMOCNICZE ---
+// --- FUNKCJA LOGOWANIA DO PLIKU ---
+void logRelayChange(int index, bool state) {
+  struct tm timeinfo;
+  char timeString[20];
+  
+  if(!getLocalTime(&timeinfo)){
+    sprintf(timeString, "Brak czasu");
+  } else {
+    strftime(timeString, sizeof(timeString), "%Y-%m-%d %H:%M:%S", &timeinfo);
+  }
+
+  File logFile = LittleFS.open("/log.txt", FILE_APPEND);
+  if(logFile){
+    String logEntry = String(timeString) + " - " + roomData[index].name + " -> " + (state ? "WŁ" : "WYŁ") + "\n";
+    logFile.print(logEntry);
+    logFile.close();
+    Serial.print("LOG: " + logEntry);
+  }
+}
+
 void toggleRelay(int index) {
   if (index < numRelays) {
     int pin = relayPins[index];
-    bool currentState = digitalRead(pin);
-    digitalWrite(pin, !currentState);
+    bool newPinState = !digitalRead(pin);
+    digitalWrite(pin, newPinState);
     
-    // Aktualizacja bitmaski relayStates
-    if (!currentState) relayStates |= (1 << index);
-    else relayStates &= ~(1 << index);
+    bool isLightOn = (newPinState == LOW);
 
-    Serial.printf("Przekaźnik %d (Pin %d) -> %s\n", index, pin, !currentState ? "ON" : "OFF");
+    if (isLightOn) {
+      relayStates |= (1 << index);  // Ustaw bit na 1
+    } else {
+      relayStates &= ~(1 << index); // Ustaw bit na 0
+    }
+
+    logRelayChange(index, isLightOn);
   }
 }
 
@@ -53,7 +79,6 @@ void receiveEvent(int howMany) {
     byte relayIndex = Wire.read();
     toggleRelay(relayIndex);
   }
-  // Sygnał przerwania dla Mastera
   digitalWrite(INTERRUPT_PIN, LOW);
   delayMicroseconds(50);
   digitalWrite(INTERRUPT_PIN, HIGH);
@@ -74,9 +99,12 @@ void handleWebPage() {
   .icon-display { font-size: 3em; color: #777; transition: 0.3s; pointer-events: none; }
   .active .icon-display { color: #FFA500; text-shadow: 0 0 10px #FFA500; font-variation-settings: 'FILL' 1; }
   .relay-name { font-size: 0.9em; margin-top: 10px; color: #ccc; pointer-events: none; }
+  .nav-links { margin-top: 20px; }
+  .nav-links a { color: #777; text-decoration: none; font-size: 0.8em; }
 </style></head><body>
   <h1>Panel Sterowania</h1>
   <div class='container' id='relayContainer'></div>
+  <div class='nav-links'><a href='/logs' target='_blank'>Zobacz logi zdarzeń</a></div>
   <script>
     let relays = [)rawliteral";
 
@@ -113,47 +141,60 @@ void handleWebPage() {
 void setup() {
   Serial.begin(115200);
 
+  // Inicjalizacja LittleFS
+  if(!LittleFS.begin(true)) Serial.println("LittleFS Error");
+
   // Konfiguracja pinów
   for (int i = 0; i < numRelays; i++) {
     pinMode(relayPins[i], OUTPUT);
-    digitalWrite(relayPins[i], LOW);
+    digitalWrite(relayPins[i], HIGH);
   }
   pinMode(INTERRUPT_PIN, OUTPUT);
   digitalWrite(INTERRUPT_PIN, HIGH);
 
   // Połączenie WiFi
   WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println("\nWiFi połączone. IP: " + WiFi.localIP().toString());
+  while (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print("."); }
+  Serial.println("\nWiFi OK. IP: " + WiFi.localIP().toString());
 
-  // Inicjalizacja I2C Slave
-  if (!Wire.begin(I2C_SLAVE_ADDR, SDA_1, SCL_1, 400000)) {
-    Serial.println("I2C Init Failed");
-    while(1);
+  // Konfiguracja mDNS (smarthome.local)
+  if (MDNS.begin("smarthome")) {
+    Serial.println("mDNS wystartował: http://smarthome.local");
   }
+
+  // Czas NTP
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+
+  // I2C Slave
+  Wire.begin(I2C_SLAVE_ADDR, SDA_1, SCL_1, 400000);
   Wire.onReceive(receiveEvent);
 
-  // Routing serwera WWW
+  // Serwer WWW
   server.on("/", handleWebPage);
   server.on("/setRelay", []() {
     if (server.hasArg("id")) {
-      int id = server.arg("id").toInt();
-      toggleRelay(id);
+      toggleRelay(server.arg("id").toInt());
       server.send(200, "text/plain", "OK");
     }
   });
   server.on("/getRelayStates", []() {
     server.send(200, "text/plain", String(relayStates));
   });
+  server.on("/logs", []() {
+    File logFile = LittleFS.open("/log.txt", FILE_READ);
+    if (logFile) {
+      server.streamFile(logFile, "text/plain");
+      logFile.close();
+    } else {
+      server.send(404, "text/plain", "Brak logow");
+    }
+  });
 
   server.begin();
-  Serial.println("Serwer WWW wystartował.");
+  relayStates = 0;
 }
 
 void loop() {
   server.handleClient();
-  delay(2); // Małe opóźnienie dla stabilności WiFi
+  delay(2);
 }
