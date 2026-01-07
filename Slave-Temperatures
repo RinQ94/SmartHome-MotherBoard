@@ -14,8 +14,8 @@ const char* rooms[] = { "kuchnia", "biuro", "lazienka", "salon", "balkon", "szaf
 const int SENSOR_COUNT = sizeof(rooms) / sizeof(rooms[0]);
 
 // Dane do połączenia Wi-Fi
-const char* ssid = "UPC2301305";
-const char* password = "N0szmandarynka";
+const char* ssid = "";
+const char* password = "";
 
 OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature sensors(&oneWire);
