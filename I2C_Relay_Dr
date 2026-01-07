@@ -1,18 +1,4 @@
 #include <Wire.h>
-#include <WiFi.h>
-#include <WebServer.h>
-#include <LittleFS.h>
-#include <ESPmDNS.h> // Biblioteka dla adresu tekstowego
-#include "time.h"
-
-// --- KONFIGURACJA WiFi ---
-const char* ssid = "x";
-const char* password = "x";
-
-// --- KONFIGURACJA CZASU (NTP) ---
-const char* ntpServer = "pool.ntp.org";
-const long  gmtOffset_sec = 3600;      // UTC+1
-const int   daylightOffset_sec = 3600; // Czas letni (+1h)
 
 // --- KONFIGURACJA I2C ---
 #define I2C_SLAVE_ADDR 0x02
@@ -24,36 +10,6 @@ const int   daylightOffset_sec = 3600; // Czas letni (+1h)
 const int relayPins[] = {13, 14, 27, 26, 16, 33, 32, 23, 12, 17, 19, 18};
 const int numRelays = sizeof(relayPins) / sizeof(relayPins[0]);
 uint16_t relayStates = 0;
-
-struct Room { String name; String icon; };
-Room roomData[] = {
-  {"Sypialnia", "bed"}, {"Łazienka", "water_drop"}, {"Kuchnia", "microwave"}, 
-  {"Łazienka2", "bathtub"}, {"Korytarz", "door_front"}, {"Biuro", "work"},
-  {"Salon", "tv"}, {"SalonTV", "videogame_asset"}, {"Kinkiet", "wall_lamp"},
-  {"Kuchnia 12v", "lightbulb"}, {"Przejscie", "hallway"}, {"Prysznic", "shower"}
-};
-
-WebServer server(80);
-
-// --- FUNKCJA LOGOWANIA DO PLIKU ---
-void logRelayChange(int index, bool state) {
-  struct tm timeinfo;
-  char timeString[20];
-  
-  if(!getLocalTime(&timeinfo)){
-    sprintf(timeString, "Brak czasu");
-  } else {
-    strftime(timeString, sizeof(timeString), "%Y-%m-%d %H:%M:%S", &timeinfo);
-  }
-
-  File logFile = LittleFS.open("/log.txt", FILE_APPEND);
-  if(logFile){
-    String logEntry = String(timeString) + " - " + roomData[index].name + " -> " + (state ? "WŁ" : "WYŁ") + "\n";
-    logFile.print(logEntry);
-    logFile.close();
-    Serial.print("LOG: " + logEntry);
-  }
-}
 
 void toggleRelay(int index) {
   if (index < numRelays) {
@@ -69,7 +25,6 @@ void toggleRelay(int index) {
       relayStates &= ~(1 << index); // Ustaw bit na 0
     }
 
-    logRelayChange(index, isLightOn);
   }
 }
 
@@ -84,65 +39,8 @@ void receiveEvent(int howMany) {
   digitalWrite(INTERRUPT_PIN, HIGH);
 }
 
-// --- OBSŁUGA WWW ---
-void handleWebPage() {
-  String html = R"rawliteral(
-<!DOCTYPE html><html lang='pl'><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no'>
-<title>SmartHome Hub</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" />
-<style>
-  body { font-family: 'Segoe UI', sans-serif; background: #1a1a1a; color: #e0e0e0; display: flex; flex-direction: column; align-items: center; margin: 0; padding-top: 20px; min-height: 100vh; -webkit-user-select: none; user-select: none; }
-  .container { width: 90%; max-width: 900px; background: #282828; padding: 25px; border-radius: 12px; display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 20px; }
-  .relay-item { display: flex; flex-direction: column; align-items: center; padding: 20px 10px; background: #333; border-radius: 10px; cursor: pointer; transition: 0.2s; touch-action: manipulation; }
-  .relay-item:active { transform: scale(0.95); }
-  .relay-item.active { background: #2e7d32; }
-  .icon-display { font-size: 3em; color: #777; transition: 0.3s; pointer-events: none; }
-  .active .icon-display { color: #FFA500; text-shadow: 0 0 10px #FFA500; font-variation-settings: 'FILL' 1; }
-  .relay-name { font-size: 0.9em; margin-top: 10px; color: #ccc; pointer-events: none; }
-  .nav-links { margin-top: 20px; }
-  .nav-links a { color: #777; text-decoration: none; font-size: 0.8em; }
-</style></head><body>
-  <h1>Panel Sterowania</h1>
-  <div class='container' id='relayContainer'></div>
-  <div class='nav-links'><a href='/logs' target='_blank'>Zobacz logi zdarzeń</a></div>
-  <script>
-    let relays = [)rawliteral";
-
-  for (int i = 0; i < numRelays; i++) {
-    bool s = (relayStates >> i) & 1;
-    html += "{id:" + String(i) + ", name:'" + roomData[i].name + "', icon:'" + roomData[i].icon + "', state:" + (s ? "true" : "false") + "}";
-    if (i < numRelays - 1) html += ",";
-  }
-
-  html += R"rawliteral(];
-    function render() {
-      const c = document.getElementById('relayContainer');
-      c.innerHTML = '';
-      relays.forEach((r, i) => {
-        const d = document.createElement('div');
-        d.className = `relay-item ${r.state ? 'active' : ''}`;
-        d.innerHTML = `<span class="material-symbols-outlined icon-display">${r.icon}</span><span class="relay-name">${r.name}</span>`;
-        d.onclick = () => { fetch(`/setRelay?id=${r.id}`); };
-        c.appendChild(d);
-      });
-    }
-    function update() {
-      fetch('/getRelayStates').then(res => res.text()).then(data => {
-        const states = parseInt(data);
-        relays.forEach((r, i) => { r.state = (states >> i) & 1; });
-        render();
-      });
-    }
-    render(); setInterval(update, 2000);
-  </script></body></html>)rawliteral";
-  server.send(200, "text/html", html);
-}
-
 void setup() {
   Serial.begin(115200);
-
-  // Inicjalizacja LittleFS
-  if(!LittleFS.begin(true)) Serial.println("LittleFS Error");
 
   // Konfiguracja pinów
   for (int i = 0; i < numRelays; i++) {
@@ -152,49 +50,12 @@ void setup() {
   pinMode(INTERRUPT_PIN, OUTPUT);
   digitalWrite(INTERRUPT_PIN, HIGH);
 
-  // Połączenie WiFi
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print("."); }
-  Serial.println("\nWiFi OK. IP: " + WiFi.localIP().toString());
-
-  // Konfiguracja mDNS (smarthome.local)
-  if (MDNS.begin("smarthome")) {
-    Serial.println("mDNS wystartował: http://smarthome.local");
-  }
-
-  // Czas NTP
-  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-
   // I2C Slave
   Wire.begin(I2C_SLAVE_ADDR, SDA_1, SCL_1, 400000);
   Wire.onReceive(receiveEvent);
 
-  // Serwer WWW
-  server.on("/", handleWebPage);
-  server.on("/setRelay", []() {
-    if (server.hasArg("id")) {
-      toggleRelay(server.arg("id").toInt());
-      server.send(200, "text/plain", "OK");
-    }
-  });
-  server.on("/getRelayStates", []() {
-    server.send(200, "text/plain", String(relayStates));
-  });
-  server.on("/logs", []() {
-    File logFile = LittleFS.open("/log.txt", FILE_READ);
-    if (logFile) {
-      server.streamFile(logFile, "text/plain");
-      logFile.close();
-    } else {
-      server.send(404, "text/plain", "Brak logow");
-    }
-  });
-
-  server.begin();
   relayStates = 0;
 }
 
 void loop() {
-  server.handleClient();
-  delay(2);
 }
